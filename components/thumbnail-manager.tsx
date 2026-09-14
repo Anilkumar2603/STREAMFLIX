@@ -32,6 +32,8 @@ export default function ThumbnailManager({
 
   const [message, setMessage] =
     useState("");
+  const [thumbnailVersion, setThumbnailVersion] =
+  useState(() => Date.now());
 
   const hasCustomThumbnail =
     thumbnailPath?.startsWith(
@@ -123,7 +125,7 @@ export default function ThumbnailManager({
         result.thumbnailPath ??
           null
       );
-
+      setThumbnailVersion(Date.now());
       setFile(null);
 
       setMessage(
@@ -184,7 +186,7 @@ export default function ThumbnailManager({
         result.thumbnailPath ??
           null
       );
-
+      setThumbnailVersion(Date.now());
       setMessage(
         result.thumbnailPath
           ? "Custom thumbnail removed. Generated thumbnail restored."
@@ -231,15 +233,10 @@ export default function ThumbnailManager({
           {imageSrc ? (
             <img
               src={`${imageSrc}${
-                imageSrc.includes("?")
-                  ? "&"
-                  : "?"
-              }v=${encodeURIComponent(
-                preview
-                  ? "preview"
-                  : thumbnailPath ||
-                    "current"
-              )}`}
+  imageSrc.includes("?")
+    ? "&"
+    : "?"
+}v=${thumbnailVersion}`}
               alt="Thumbnail preview"
               className="h-full w-full object-cover"
             />

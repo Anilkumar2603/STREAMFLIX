@@ -395,7 +395,7 @@ const streamDir =
          * The actual R2 object remains private.
          */
         const thumbnailPath =
-          `/media/thumbnails/${id}.jpg`;
+  `/media/thumbnails/${id}.jpg?v=${Date.now()}`;;
 
         await prisma.video.update(
           {
@@ -560,9 +560,9 @@ export async function DELETE(
        * R2 custom thumbnail.
        */
       if (
-        video.thumbnailPath ===
-        `/media/thumbnails/${id}.jpg`
-      ) {
+  video.thumbnailPath?.split("?")[0] ===
+  `/media/thumbnails/${id}.jpg`
+) {
         await deleteThumbnailFromR2(
           objectKey
         );
