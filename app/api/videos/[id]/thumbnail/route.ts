@@ -7,7 +7,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
-
+import ffmpegPath from "ffmpeg-static";
 const execFileAsync = promisify(execFile);
 
 const STREAMS_ROOT = path.join(
@@ -369,7 +369,7 @@ const streamDir =
          ===================================================== */
 
       await execFileAsync(
-        "ffmpeg",
+        ffmpegPath || "ffmpeg",
         [
           "-y",
           "-i",
