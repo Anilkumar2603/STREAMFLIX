@@ -310,17 +310,18 @@ export async function POST(
       );
     }
 
-    const videoUploadDir =
-      path.join(
-        UPLOADS_ROOT,
-        id
-      );
+    const isR2 =
+  process.env.STORAGE_MODE === "r2";
 
-    const streamDir =
-      path.join(
-        STREAMS_ROOT,
-        id
-      );
+const videoUploadDir =
+  isR2
+    ? path.join("/tmp", "streamflix", "uploads", id)
+    : path.join(UPLOADS_ROOT, id);
+
+const streamDir =
+  isR2
+    ? path.join("/tmp", "streamflix", "streams", id)
+    : path.join(STREAMS_ROOT, id);
 
     const tempPath =
       path.join(
