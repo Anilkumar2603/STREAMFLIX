@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
 
-const execFileAsync =
-  promisify(execFile);
 
 const STREAMS_ROOT =
   path.join(
@@ -110,59 +106,34 @@ async function getR2Thumbnail(
       objectKey
     )}`;
 
-  const tempPath =
-    path.join(
-      process.cwd(),
-      "uploads",
-      videoId,
-      `.thumbnail-r2-${Date.now()}.jpg`
-    );
-
-  await fs.mkdir(
-    path.dirname(tempPath),
-    {
-      recursive: true,
-    }
+  console.log(
+    `Fetching thumbnail from R2: ${objectKey}`
   );
 
-  try {
-    await execFileAsync(
-      "curl.exe",
-      [
-        "--fail",
-        "--location",
-        "--silent",
-        "--show-error",
-        "--retry",
-        "3",
-        "--retry-delay",
-        "1",
-        "-H",
-        `Authorization: Bearer ${workerToken}`,
-        "--output",
-        tempPath,
-        url,
-      ],
-      {
-        maxBuffer:
-          1024 * 1024 * 5,
-      }
-    );
+  const response =
+    await fetch(url, {
+      method: "GET",
 
-    const file =
-      await fs.readFile(
-        tempPath
-      );
+      headers: {
+        Authorization:
+          `Bearer ${workerToken}`,
+      },
 
-    return file;
-  } finally {
-    await fs.rm(
-      tempPath,
-      {
-        force: true,
-      }
+      cache: "no-store",
+    });
+
+  if (!response.ok) {
+    const errorText =
+      await response.text();
+
+    throw new Error(
+      `R2 thumbnail fetch failed: ${response.status} ${errorText}`
     );
   }
+
+  return Buffer.from(
+    await response.arrayBuffer()
+  );
 }
 
 /* =========================================================
