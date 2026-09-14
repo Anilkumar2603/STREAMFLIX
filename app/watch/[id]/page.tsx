@@ -35,19 +35,6 @@ export default function WatchPage() {
   const [selectedSubtitle, setSelectedSubtitle] =
     useState("off");
 
-  // Audio tracks are discovered automatically from the HLS manifest.
-  // No manual audio upload is required in the player.
-  const [audioTracks, setAudioTracks] = useState<
-    { id: number; label: string; language?: string }[]
-  >([]);
-
-  const [currentAudioTrack, setCurrentAudioTrack] =
-    useState<number>(-1);
-
-  const [showAudioMenu, setShowAudioMenu] =
-    useState(false);
-
-
   // OTT player UI state
   const playerRef =
     useRef<HTMLDivElement>(null);
@@ -692,9 +679,6 @@ export default function WatchPage() {
        */
       setQualities([]);
       setCurrentQuality("Auto");
-      setAudioTracks([]);
-      setCurrentAudioTrack(-1);
-      setShowAudioMenu(false);
     }
 
     /*
@@ -954,29 +938,6 @@ export default function WatchPage() {
 
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
-
-      hls.on(
-        Hls.Events.AUDIO_TRACKS_UPDATED,
-        (_event, data) => {
-          const detectedAudioTracks = data.audioTracks.map(
-            (track, index) => ({
-              id: index,
-              label:
-                track.name ||
-                track.lang ||
-                `Audio ${index + 1}`,
-              language: track.lang || undefined,
-            })
-          );
-
-          setAudioTracks(detectedAudioTracks);
-          setCurrentAudioTrack(
-            typeof hls!.audioTrack === "number"
-              ? hls!.audioTrack
-              : -1
-          );
-        }
-      );
 
       hls.on(
         Hls.Events.MANIFEST_PARSED,
@@ -1481,17 +1442,6 @@ export default function WatchPage() {
   /*
    * OTT player helpers.
    */
-  function changeAudioTrack(trackId: number) {
-    const hls = hlsRef.current;
-    if (!hls) return;
-
-    hls.audioTrack = trackId;
-    setCurrentAudioTrack(trackId);
-    setShowAudioMenu(false);
-    setShowSettings(false);
-    revealControls(false);
-  }
-
   function clearControlsTimer() {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
@@ -1983,7 +1933,6 @@ export default function WatchPage() {
               isFullscreen ? "h-screen" : "aspect-video max-h-[78vh]"
             }`}
             onMouseMove={() => revealControls(true)}
-            onTouchStart={() => revealControls(true)}
             onMouseLeave={() => {
               if (isPlaying) {
                 clearControlsTimer();
@@ -1991,21 +1940,22 @@ export default function WatchPage() {
                   setShowControls(false);
                   setShowSettings(false);
                   setShowSubtitlesMenu(false);
-                  setShowAudioMenu(false);
-                }, 1200);
+                }, 1500);
               }
             }}
-            onClick={() => revealControls(true)}
+            onClick={(event) => {
+              if (event.target === event.currentTarget) togglePlayback();
+            }}
             onDoubleClick={() => void toggleFullscreen()}
           >
-            <video
+            <video aria-label="Video player"
               ref={videoRef}
               playsInline
               preload="auto"
               className="h-full w-full object-contain"
               onClick={(event) => {
                 event.stopPropagation();
-                revealControls(true);
+                togglePlayback();
               }}
             >
               {subtitles.map((subtitle) => {
@@ -2064,300 +2014,229 @@ export default function WatchPage() {
               className={`absolute inset-x-0 bottom-0 transition-opacity duration-300 ${
                 showControls ? "opacity-100" : "pointer-events-none opacity-0"
               }`}
-              onClick={(event) => event.stopPropagation()}
-              onTouchStart={(event) => event.stopPropagation()}
             >
-              <div className="bg-gradient-to-t from-black/95 via-black/65 to-transparent px-3 pb-2 pt-14 sm:px-6">
+              <div className="px-4 pb-2 sm:px-6">
                 <div
-                  className="group/progress relative flex h-6 cursor-pointer items-center"
+                  className="group/progress relative h-1.5 cursor-pointer rounded-full bg-white/25 transition-all hover:h-2.5"
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
                     seekToPercent((event.clientX - rect.left) / rect.width);
-                    revealControls(true);
                   }}
                 >
-                  <div className="absolute left-0 right-0 h-1 rounded-full bg-white/25 transition-all group-hover/progress:h-1.5" />
                   <div
-                    className="absolute left-0 h-1 rounded-full bg-white/30 transition-all group-hover/progress:h-1.5"
+                    className="absolute left-0 top-0 h-full rounded-full bg-white/20"
                     style={{ width: `${bufferedPercent}%` }}
                   />
                   <div
-                    className="absolute left-0 h-1 rounded-full bg-red-600 transition-all group-hover/progress:h-1.5"
+                    className="absolute left-0 top-0 h-full rounded-full bg-red-600"
                     style={{ width: `${progressPercent}%` }}
                   />
                   <div
-                    className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-red-600 opacity-0 shadow-lg transition-opacity group-hover/progress:opacity-100 sm:h-4 sm:w-4"
+                    className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-red-600 opacity-0 shadow-lg transition-opacity group-hover/progress:opacity-100"
                     style={{ left: `calc(${progressPercent}% - 7px)` }}
                   />
                 </div>
+              </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-0.5 sm:gap-1.5">
-                    <button
-                      type="button"
-                      aria-label={isPlaying ? "Pause" : "Play"}
-                      onClick={togglePlayback}
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base transition hover:bg-white/15 active:scale-95 sm:text-lg"
-                    >
-                      {isPlaying ? "❚❚" : "▶"}
-                    </button>
+              <div className="flex items-center justify-between gap-2 px-4 pb-4 sm:px-6 sm:pb-5">
+                <div className="flex min-w-0 items-center gap-1 sm:gap-2">
+                  <button
+                    type="button"
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                    onClick={togglePlayback}
+                    className="flex h-10 w-10 items-center justify-center rounded-full text-xl transition hover:bg-white/15"
+                  >
+                    {isPlaying ? "❚❚" : "▶"}
+                  </button>
 
-                    <button
-                      type="button"
-                      aria-label="Rewind 10 seconds"
-                      onClick={() => seekBy(-10)}
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition hover:bg-white/15 active:scale-95 sm:w-11"
-                    >
-                      ↶10
-                    </button>
+                  <button
+                    type="button"
+                    aria-label="Rewind 10 seconds"
+                    onClick={() => seekBy(-10)}
+                    className="flex h-10 min-w-10 items-center justify-center rounded-full text-xs font-semibold transition hover:bg-white/15"
+                  >
+                    ↶10
+                  </button>
 
-                    <button
-                      type="button"
-                      aria-label="Forward 10 seconds"
-                      onClick={() => seekBy(10)}
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition hover:bg-white/15 active:scale-95 sm:w-11"
-                    >
-                      10↷
-                    </button>
+                  <button
+                    type="button"
+                    aria-label="Forward 10 seconds"
+                    onClick={() => seekBy(10)}
+                    className="flex h-10 min-w-10 items-center justify-center rounded-full text-xs font-semibold transition hover:bg-white/15"
+                  >
+                    10↷
+                  </button>
 
-                    <button
-                      type="button"
-                      aria-label={isMuted ? "Unmute" : "Mute"}
-                      onClick={toggleMute}
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base transition hover:bg-white/15 active:scale-95 sm:text-lg"
-                    >
-                      {isMuted || volume === 0 ? "🔇" : "🔊"}
-                    </button>
+                  <button
+                    type="button"
+                    aria-label={isMuted ? "Unmute" : "Mute"}
+                    onClick={toggleMute}
+                    className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
+                  >
+                    {isMuted || volume === 0 ? "🔇" : "🔊"}
+                  </button>
 
-                    <div className="hidden w-24 items-center sm:flex">
-                      <input
-                        aria-label="Volume"
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={isMuted ? 0 : volume}
-                        onChange={(event) => changeVolume(Number(event.target.value))}
-                        className="w-full accent-white"
-                      />
-                    </div>
-
-                    <span className="ml-1 whitespace-nowrap text-[11px] font-medium tabular-nums text-white/75 sm:text-sm">
-                      {formatTime(currentTime)} / {formatTime(duration)}
-                    </span>
+                  <div className="hidden w-24 items-center sm:flex">
+                    <input
+                      aria-label="Volume"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={isMuted ? 0 : volume}
+                      onChange={(event) => changeVolume(Number(event.target.value))}
+                      className="w-full accent-white"
+                    />
                   </div>
 
-                  <div className="relative flex shrink-0 items-center gap-0.5 sm:gap-1.5">
-                    {audioTracks.length > 1 && (
-                      <div className="relative">
-                        <button
-                          type="button"
-                          aria-label="Audio tracks"
-                          aria-expanded={showAudioMenu}
-                          onClick={() => {
-                            setShowAudioMenu((current) => !current);
-                            setShowSubtitlesMenu(false);
-                            setShowSettings(false);
-                            revealControls(false);
-                          }}
-                          className={`flex h-10 items-center gap-1 rounded-full px-2.5 text-xs font-semibold transition hover:bg-white/15 active:scale-95 sm:px-3 sm:text-sm ${
-                            showAudioMenu ? "bg-white/15" : ""
-                          }`}
-                        >
-                          <span>◉</span>
-                          <span className="hidden sm:inline">Audio</span>
-                        </button>
+                  <span className="ml-1 whitespace-nowrap text-xs text-white/70 sm:text-sm">
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </span>
+                </div>
 
-                        {showAudioMenu && (
-                          <div className="absolute bottom-12 right-0 w-56 rounded-2xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
-                            <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
-                              Audio
-                            </div>
-                            {audioTracks.map((track) => (
-                              <button
-                                key={track.id}
-                                type="button"
-                                onClick={() => changeAudioTrack(track.id)}
-                                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                  currentAudioTrack === track.id
-                                    ? "bg-white/10 text-white"
-                                    : "text-white/65"
-                                }`}
-                              >
-                                <span className="truncate">{track.label}</span>
-                                {currentAudioTrack === track.id && <span>✓</span>}
-                              </button>
-                            ))}
+                <div className="relative flex shrink-0 items-center gap-1 sm:gap-2">
+                  {subtitles.length > 0 && (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        aria-label="Subtitles"
+                        aria-expanded={showSubtitlesMenu}
+                        onClick={() => {
+                          setShowSubtitlesMenu((current) => !current);
+                          setShowSettings(false);
+                          revealControls(false);
+                        }}
+                        className={`flex h-10 items-center gap-1 rounded-full px-2.5 text-xs font-semibold transition hover:bg-white/15 sm:px-3 sm:text-sm ${
+                          selectedSubtitle !== "off" ? "bg-white/15" : ""
+                        }`}
+                      >
+                        CC
+                      </button>
+
+                      {showSubtitlesMenu && (
+                        <div className="absolute bottom-12 right-0 w-48 rounded-xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
+                          <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
+                            Subtitles
                           </div>
-                        )}
-                      </div>
-                    )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSubtitle("off");
+                              setShowSubtitlesMenu(false);
+                              revealControls(false);
+                            }}
+                            className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedSubtitle === "off" ? "text-white" : "text-white/60"}`}
+                          >
+                            Off
+                            {selectedSubtitle === "off" && <span>✓</span>}
+                          </button>
+                          {subtitles.map((subtitle) => (
+                            <button
+                              key={subtitle.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedSubtitle(subtitle.language);
+                                setShowSubtitlesMenu(false);
+                                revealControls(false);
+                              }}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedSubtitle === subtitle.language ? "text-white" : "text-white/60"}`}
+                            >
+                              {subtitle.label}
+                              {selectedSubtitle === subtitle.language && <span>✓</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                    {subtitles.length > 0 && (
-                      <div className="relative">
-                        <button
-                          type="button"
-                          aria-label="Subtitles"
-                          aria-expanded={showSubtitlesMenu}
-                          onClick={() => {
-                            setShowSubtitlesMenu((current) => !current);
-                            setShowSettings(false);
-                            setShowAudioMenu(false);
-                            revealControls(false);
-                          }}
-                          className={`flex h-10 items-center gap-1 rounded-full px-2.5 text-xs font-semibold transition hover:bg-white/15 active:scale-95 sm:px-3 sm:text-sm ${
-                            selectedSubtitle !== "off" ? "bg-white/15" : ""
-                          }`}
-                        >
-                          CC
-                        </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-label="Player settings"
+                      aria-expanded={showSettings}
+                      onClick={() => {
+                        setShowSettings((current) => !current);
+                        setShowSubtitlesMenu(false);
+                        revealControls(false);
+                      }}
+                      className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
+                    >
+                      ⚙
+                    </button>
 
-                        {showSubtitlesMenu && (
-                          <div className="absolute bottom-12 right-0 w-52 rounded-2xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
+                    {showSettings && (
+                      <div className="absolute bottom-12 right-0 w-56 rounded-xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
+                        {qualities.length > 0 && (
+                          <div className="mb-2">
                             <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
-                              Subtitles
+                              Quality
                             </div>
                             <button
                               type="button"
                               onClick={() => {
-                                setSelectedSubtitle("off");
-                                setShowSubtitlesMenu(false);
-                                revealControls(false);
+                                changeQuality("Auto");
+                                setShowSettings(false);
                               }}
-                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                selectedSubtitle === "off"
-                                  ? "bg-white/10 text-white"
-                                  : "text-white/65"
-                              }`}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${currentQuality === "Auto" ? "text-white" : "text-white/60"}`}
                             >
-                              Off
-                              {selectedSubtitle === "off" && <span>✓</span>}
+                              Auto
+                              {currentQuality === "Auto" && <span>✓</span>}
                             </button>
-                            {subtitles.map((subtitle) => (
+                            {qualities.map((quality) => (
                               <button
-                                key={subtitle.id}
+                                key={quality}
                                 type="button"
                                 onClick={() => {
-                                  setSelectedSubtitle(subtitle.language);
-                                  setShowSubtitlesMenu(false);
-                                  revealControls(false);
+                                  changeQuality(quality);
+                                  setShowSettings(false);
                                 }}
-                                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                  selectedSubtitle === subtitle.language
-                                    ? "bg-white/10 text-white"
-                                    : "text-white/65"
-                                }`}
+                                className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${currentQuality === quality ? "text-white" : "text-white/60"}`}
                               >
-                                <span className="truncate">{subtitle.label}</span>
-                                {selectedSubtitle === subtitle.language && <span>✓</span>}
+                                {quality}
+                                {currentQuality === quality && <span>✓</span>}
                               </button>
                             ))}
                           </div>
                         )}
+
+                        <div className="border-t border-white/10 pt-2">
+                          <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
+                            Playback speed
+                          </div>
+                          {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                            <button
+                              key={rate}
+                              type="button"
+                              onClick={() => changePlaybackRate(rate)}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${playbackRate === rate ? "text-white" : "text-white/60"}`}
+                            >
+                              {rate === 1 ? "Normal" : `${rate}x`}
+                              {playbackRate === rate && <span>✓</span>}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
-
-                    <div className="relative">
-                      <button
-                        type="button"
-                        aria-label="Player settings"
-                        aria-expanded={showSettings}
-                        onClick={() => {
-                          setShowSettings((current) => !current);
-                          setShowSubtitlesMenu(false);
-                          setShowAudioMenu(false);
-                          revealControls(false);
-                        }}
-                        className="flex h-10 w-10 items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
-                      >
-                        ⚙
-                      </button>
-
-                      {showSettings && (
-                        <div className="absolute bottom-12 right-0 max-h-[65vh] w-60 overflow-y-auto rounded-2xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
-                          {qualities.length > 0 && (
-                            <div className="mb-2">
-                              <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
-                                Quality
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  changeQuality("Auto");
-                                  setShowSettings(false);
-                                }}
-                                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                  currentQuality === "Auto"
-                                    ? "bg-white/10 text-white"
-                                    : "text-white/65"
-                                }`}
-                              >
-                                <span>Auto</span>
-                                {currentQuality === "Auto" && <span>✓</span>}
-                              </button>
-                              {qualities.map((quality) => (
-                                <button
-                                  key={quality}
-                                  type="button"
-                                  onClick={() => {
-                                    changeQuality(quality);
-                                    setShowSettings(false);
-                                  }}
-                                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                    currentQuality === quality
-                                      ? "bg-white/10 text-white"
-                                      : "text-white/65"
-                                  }`}
-                                >
-                                  {quality}
-                                  {currentQuality === quality && <span>✓</span>}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="border-t border-white/10 pt-2">
-                            <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
-                              Playback speed
-                            </div>
-                            {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
-                              <button
-                                key={rate}
-                                type="button"
-                                onClick={() => changePlaybackRate(rate)}
-                                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-white/10 ${
-                                  playbackRate === rate
-                                    ? "bg-white/10 text-white"
-                                    : "text-white/65"
-                                }`}
-                              >
-                                {rate === 1 ? "Normal" : `${rate}x`}
-                                {playbackRate === rate && <span>✓</span>}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      aria-label="Picture in picture"
-                      onClick={() => void togglePictureInPicture()}
-                      className="hidden h-10 w-10 items-center justify-center rounded-full text-sm transition hover:bg-white/15 active:scale-95 md:flex"
-                    >
-                      ▣
-                    </button>
-
-                    <button
-                      type="button"
-                      aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                      onClick={() => void toggleFullscreen()}
-                      className="flex h-10 w-10 items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
-                    >
-                      ⛶
-                    </button>
                   </div>
+
+                  <button
+                    type="button"
+                    aria-label="Picture in picture"
+                    onClick={() => void togglePictureInPicture()}
+                    className="hidden h-10 w-10 items-center justify-center rounded-full text-sm transition hover:bg-white/15 md:flex"
+                  >
+                    ▣
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    onClick={() => void toggleFullscreen()}
+                    className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
+                  >
+                    {isFullscreen ? "⛶" : "⛶"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -2385,11 +2264,6 @@ export default function WatchPage() {
                   {selectedSubtitle !== "off" && (
                     <span className="rounded-full border border-white/10 px-3 py-1.5">
                       {subtitles.find((item) => item.language === selectedSubtitle)?.label || "CC"}
-                    </span>
-                  )}
-                  {audioTracks.length > 1 && currentAudioTrack >= 0 && (
-                    <span className="rounded-full border border-white/10 px-3 py-1.5">
-                      {audioTracks.find((item) => item.id === currentAudioTrack)?.label || "Audio"}
                     </span>
                   )}
                 </div>
