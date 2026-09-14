@@ -432,7 +432,7 @@ async function deleteVideo(videoId: string) {
         <div className="flex h-16 items-center justify-between px-6 md:px-10">
           <div className="flex items-center gap-8">
             <Link
-              href="/admin"
+              href="/admin/homepage"
               className="text-xl font-black tracking-tight"
             >
               STREAMFLIX
