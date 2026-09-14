@@ -195,7 +195,7 @@ export async function GET(
                 "image/jpeg",
 
               "Cache-Control":
-                "public, max-age=3600, s-maxage=3600",
+  "no-store, no-cache, must-revalidate",
 
               "X-Content-Type-Options":
                 "nosniff",
@@ -250,7 +250,7 @@ export async function GET(
             "image/jpeg",
 
           "Cache-Control":
-            "public, max-age=3600, s-maxage=3600",
+  "no-store, no-cache, must-revalidate",
 
           "X-Content-Type-Options":
             "nosniff",
