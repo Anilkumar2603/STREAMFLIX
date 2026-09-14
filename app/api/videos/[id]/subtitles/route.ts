@@ -3,10 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdminApi } from "@/lib/admin";
 import fs from "fs/promises";
 import path from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
 
-const execFileAsync = promisify(execFile);
 
 const STREAMS_ROOT = path.join(process.cwd(), "streams");
 
@@ -54,18 +51,23 @@ async function uploadSubtitleToR2(
       objectKey
     )}`;
 
-  await execFileAsync("curl.exe", [
-    "-sS",
-    "-X",
-    "PUT",
-    "-H",
-    `Authorization: Bearer ${workerToken}`,
-    "-H",
-    "Content-Type: text/vtt; charset=utf-8",
-    "--data-binary",
-    `@${filePath}`,
-    url,
-  ]);
+  const fileBuffer = await fs.readFile(filePath);
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${workerToken}`,
+      "Content-Type": "text/vtt; charset=utf-8",
+    },
+    body: fileBuffer,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `R2 subtitle upload failed: ${response.status} ${errorText}`
+    );
+  }
 }
 
 /*
@@ -79,14 +81,19 @@ async function deleteSubtitleFromR2(objectKey: string) {
       objectKey
     )}`;
 
-  await execFileAsync("curl.exe", [
-    "-sS",
-    "-X",
-    "DELETE",
-    "-H",
-    `Authorization: Bearer ${workerToken}`,
-    url,
-  ]);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${workerToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `R2 subtitle deletion failed: ${response.status} ${errorText}`
+    );
+  }
 }
 
 function isSafeVideoId(id: string) {
@@ -299,7 +306,9 @@ export async function POST(
      * binary/text file directly to the Worker.
      */
     const tempDir =
-      path.join(
+  process.env.STORAGE_MODE === "r2"
+    ? path.join("/tmp", "streamflix", "uploads", id, "subtitles")
+    : path.join(
         process.cwd(),
         "uploads",
         id,
