@@ -83,10 +83,7 @@ async function uploadThumbnailToR2(
   const workerToken =
     process.env.R2_WORKER_AUTH_TOKEN;
 
-  if (
-    !workerUrl ||
-    !workerToken
-  ) {
+  if (!workerUrl || !workerToken) {
     throw new Error(
       "R2 Worker environment variables are not configured"
     );
@@ -101,32 +98,26 @@ async function uploadThumbnailToR2(
     `Uploading thumbnail to R2: ${objectKey}`
   );
 
-  await execFileAsync(
-    "curl.exe",
-    [
-      "--fail",
-      "--location",
-      "--silent",
-      "--show-error",
-      "--retry",
-      "3",
-      "--retry-delay",
-      "1",
-      "-X",
-      "PUT",
-      "-H",
-      `Authorization: Bearer ${workerToken}`,
-      "-H",
-      "Content-Type: image/jpeg",
-      "--upload-file",
-      filePath,
-      url,
-    ],
-    {
-      maxBuffer:
-        1024 * 1024 * 5,
-    }
-  );
+  const fileBuffer =
+    await fs.readFile(filePath);
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${workerToken}`,
+      "Content-Type": "image/jpeg",
+    },
+    body: fileBuffer,
+  });
+
+  if (!response.ok) {
+    const errorText =
+      await response.text();
+
+    throw new Error(
+      `R2 thumbnail upload failed: ${response.status} ${errorText}`
+    );
+  }
 
   console.log(
     `Thumbnail uploaded to R2: ${objectKey}`
@@ -142,10 +133,7 @@ async function deleteThumbnailFromR2(
   const workerToken =
     process.env.R2_WORKER_AUTH_TOKEN;
 
-  if (
-    !workerUrl ||
-    !workerToken
-  ) {
+  if (!workerUrl || !workerToken) {
     throw new Error(
       "R2 Worker environment variables are not configured"
     );
@@ -160,28 +148,21 @@ async function deleteThumbnailFromR2(
     `Deleting thumbnail from R2: ${objectKey}`
   );
 
-  await execFileAsync(
-    "curl.exe",
-    [
-      "--fail",
-      "--location",
-      "--silent",
-      "--show-error",
-      "--retry",
-      "3",
-      "--retry-delay",
-      "1",
-      "-X",
-      "DELETE",
-      "-H",
-      `Authorization: Bearer ${workerToken}`,
-      url,
-    ],
-    {
-      maxBuffer:
-        1024 * 1024 * 5,
-    }
-  );
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${workerToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText =
+      await response.text();
+
+    throw new Error(
+      `R2 thumbnail deletion failed: ${response.status} ${errorText}`
+    );
+  }
 
   console.log(
     `Thumbnail deleted from R2: ${objectKey}`
