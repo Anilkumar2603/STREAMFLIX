@@ -94,6 +94,9 @@ function getProcessingStageLabel(
     case "GENERATING_THUMBNAIL":
       return "Generating thumbnail";
 
+    case "UPLOADING_TO_R2":
+      return "Uploading HLS to R2";
+
     case "READY":
       return "Ready";
 
@@ -526,7 +529,7 @@ async function deleteVideo(videoId: string) {
             </p>
 
             <p className="mt-1 text-xs text-gray-600">
-              Currently transcoding
+              Currently processing or uploading
             </p>
           </div>
 
@@ -562,7 +565,7 @@ async function deleteVideo(videoId: string) {
                 </h2>
 
                 <p className="mt-1 text-xs text-gray-600">
-                  Live transcoding status
+                  Live processing & upload status
                 </p>
               </div>
 
@@ -610,34 +613,49 @@ async function deleteVideo(videoId: string) {
 
                         {/* Metrics */}
                         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
-                          <div>
-                            <span className="text-gray-600">
-                              Encoder{" "}
-                            </span>
+                          {video.processingStage ===
+                          "UPLOADING_TO_R2" ? (
+                            <div>
+                              <span className="text-gray-600">
+                                Upload{" "}
+                              </span>
 
-                            <span className="text-gray-400">
-                              {video.encoderUsed ??
-                                "Detecting..."}
-                            </span>
-                          </div>
+                              <span className="text-gray-400">
+                                HLS streams → R2
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                              <div>
+                                <span className="text-gray-600">
+                                  Encoder{" "}
+                                </span>
 
-                          <div>
-                            <span className="text-gray-600">
-                              Speed{" "}
-                            </span>
+                                <span className="text-gray-400">
+                                  {video.encoderUsed ??
+                                    "Detecting..."}
+                                </span>
+                              </div>
 
-                            <span className="text-gray-400">
-                              {video.processingSpeed !==
-                                null &&
-                              Number.isFinite(
-                                video.processingSpeed
-                              )
-                                ? `${video.processingSpeed.toFixed(
-                                    1
-                                  )}x`
-                                : "--"}
-                            </span>
-                          </div>
+                              <div>
+                                <span className="text-gray-600">
+                                  Speed{" "}
+                                </span>
+
+                                <span className="text-gray-400">
+                                  {video.processingSpeed !==
+                                    null &&
+                                  Number.isFinite(
+                                    video.processingSpeed
+                                  )
+                                    ? `${video.processingSpeed.toFixed(
+                                        1
+                                      )}x`
+                                    : "--"}
+                                </span>
+                              </div>
+                            </>
+                          )}
 
                           <div>
                             <span className="text-gray-600">
@@ -679,18 +697,25 @@ async function deleteVideo(videoId: string) {
                           )}
                         </span>
 
-                        <span>
-                          FPS{" "}
-                          {video.processingFps !==
-                            null &&
-                          Number.isFinite(
-                            video.processingFps
-                          )
-                            ? video.processingFps.toFixed(
-                                1
-                              )
-                            : "--"}
-                        </span>
+                        {video.processingStage ===
+                        "UPLOADING_TO_R2" ? (
+                          <span>
+                            Uploading HLS streams to R2
+                          </span>
+                        ) : (
+                          <span>
+                            FPS{" "}
+                            {video.processingFps !==
+                              null &&
+                            Number.isFinite(
+                              video.processingFps
+                            )
+                              ? video.processingFps.toFixed(
+                                  1
+                                )
+                              : "--"}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
