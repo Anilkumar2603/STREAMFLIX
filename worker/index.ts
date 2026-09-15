@@ -1,8 +1,5 @@
 import { prisma } from "../lib/prisma";
-import {
-  processVideo,
-  resumeFailedVideoUpload,
-} from "./process-video";
+import { processVideo } from "./process-video";
 
 const POLL_INTERVAL = 2000;
 
@@ -30,6 +27,9 @@ async function workerLoop() {
       });
 
       if (!video) {
+        // Nothing to process.
+        // Don't print anything here.
+        // This prevents terminal flickering.
         await sleep(POLL_INTERVAL);
         continue;
       }
@@ -61,6 +61,7 @@ async function workerLoop() {
         console.error("================================");
       }
 
+      // Small delay before checking for another video.
       await sleep(1000);
     } catch (error) {
       console.error("");
@@ -74,48 +75,7 @@ async function workerLoop() {
   }
 }
 
-async function main() {
-  const command = process.argv[2];
-  const videoId = process.argv[3];
-
-  // ==========================================
-  // RESUME MODE
-  // ==========================================
-  if (command === "resume") {
-    if (!videoId) {
-      throw new Error(
-        "Usage: npm run worker -- resume <videoId>"
-      );
-    }
-
-    console.log("================================");
-    console.log("===== RESUMING FAILED VIDEO =====");
-    console.log("================================");
-    console.log(`Video ID: ${videoId}`);
-    console.log("================================");
-
-    await resumeFailedVideoUpload(videoId);
-
-    console.log("================================");
-    console.log("===== RESUME COMPLETED =====");
-    console.log("================================");
-
-    return;
-  }
-
-  // ==========================================
-  // NORMAL WORKER MODE
-  // ==========================================
-  await workerLoop();
-}
-
-main().catch((error) => {
-  console.error("");
-  console.error("================================");
-  console.error("WORKER FATAL ERROR");
-  console.error("================================");
-  console.error(error);
-  console.error("================================");
-
+workerLoop().catch((error) => {
+  console.error("Worker stopped unexpectedly:", error);
   process.exit(1);
 });

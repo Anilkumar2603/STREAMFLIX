@@ -8,65 +8,72 @@ datasource db {
 }
 
 model Video {
-  id                String          @id @default(cuid())
-  title             String
-  description       String?
-  genre             String?
-  releaseYear       Int?
-  ageRating         String?
-  featured          Boolean         @default(false)
-  published         Boolean         @default(true)
-  originalFile      String
-  streamPath        String?
-  thumbnailPath     String?
-  status            String          @default("PROCESSING")
-  duration          Float?
-  progress          Float           @default(0)
-  processingFps     Float?
-  processingSpeed   Float?
-  processingElapsed Float?
-  processingEta     Float?
-  processingStage   String?
-  encoderUsed       String?
-  createdAt         DateTime        @default(now())
-  myList            MyList[]
-  subtitles         Subtitle[]
-  videoReviews      VideoReview[]
-  watchProgress     WatchProgress[]
-}
+  id                 String   @id @default(cuid())
+  title              String
+  description        String?
+  genre              String?
+  releaseYear        Int?
+  ageRating          String?
+  featured           Boolean  @default(false)
+  published          Boolean  @default(true)
 
+  originalFile       String
+  streamPath         String?
+  thumbnailPath      String?
+
+  status             String   @default("PROCESSING")
+  duration           Float?
+  subtitles          Subtitle[]
+  myList       MyList[]
+  watchProgress WatchProgress[]
+  videoReviews VideoReview[]
+  progress           Float    @default(0)
+  processingFps      Float?
+  processingSpeed    Float?
+  processingElapsed  Float?
+  processingEta      Float?
+  processingStage    String?
+  encoderUsed        String?
+
+  createdAt          DateTime @default(now())
+}
 model User {
-  id            String          @id @default(cuid())
+  id            String   @id @default(cuid())
   name          String
-  email         String          @unique
+  email         String   @unique
   passwordHash  String
-  role          String          @default("USER")
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  role          String   @default("USER")
+
   myList        MyList[]
+  watchProgress WatchProgress[]
   sessions      Session[]
   videoReviews  VideoReview[]
-  watchProgress WatchProgress[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model Session {
   id        String   @id @default(cuid())
   token     String   @unique
   userId    String
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   expiresAt DateTime
   createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
-
 model MyList {
   id        String   @id @default(cuid())
   userId    String
   videoId   String
-  createdAt DateTime @default(now())
+
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
 
   @@unique([userId, videoId])
   @@index([userId])
@@ -77,11 +84,14 @@ model WatchProgress {
   id              String   @id @default(cuid())
   userId          String
   videoId         String
+
   positionSeconds Float    @default(0)
   durationSeconds Float?
   completed       Boolean  @default(false)
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   video           Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
@@ -96,25 +106,28 @@ model VideoReview {
   videoId   String
   rating    Int
   review    String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([userId, videoId])
   @@index([videoId])
   @@index([userId])
 }
-
 model Subtitle {
   id        String   @id @default(cuid())
   videoId   String
   language  String
   label     String
   filePath  String
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([videoId, language])
   @@index([videoId])
