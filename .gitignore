@@ -1,1 +1,8 @@
 node_modules
+.env
+generated
+package.json
+next-env.d.ts
+.next
+streams
+uploads

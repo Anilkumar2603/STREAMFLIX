@@ -35,6 +35,18 @@ export default function WatchPage() {
   const [selectedSubtitle, setSelectedSubtitle] =
     useState("off");
 
+  // Audio tracks are discovered automatically from the HLS master manifest.
+  // No manual audio upload is required.
+  const [audioTracks, setAudioTracks] = useState<
+    { id: number; label: string; language?: string }[]
+  >([]);
+
+  const [currentAudioTrack, setCurrentAudioTrack] =
+    useState<number>(-1);
+
+  const [showAudioMenu, setShowAudioMenu] =
+    useState(false);
+
   // OTT player UI state
   const playerRef =
     useRef<HTMLDivElement>(null);
@@ -679,6 +691,9 @@ export default function WatchPage() {
        */
       setQualities([]);
       setCurrentQuality("Auto");
+      setAudioTracks([]);
+      setCurrentAudioTrack(-1);
+      setShowAudioMenu(false);
     }
 
     /*
@@ -940,6 +955,46 @@ export default function WatchPage() {
       hls.attachMedia(video);
 
       hls.on(
+        Hls.Events.AUDIO_TRACKS_UPDATED,
+        (_event, data) => {
+          const detectedAudioTracks =
+            (data.audioTracks || []).map(
+              (track, index) => ({
+                id: index,
+                label:
+                  track.lang
+                    ? track.lang.toUpperCase()
+                    : track.name ||
+                      `Audio ${index + 1}`,
+                language:
+                  track.lang || undefined,
+              })
+            );
+
+          setAudioTracks(
+            detectedAudioTracks
+          );
+
+          setCurrentAudioTrack(
+            typeof hls!.audioTrack === "number"
+              ? hls!.audioTrack
+              : -1
+          );
+        }
+      );
+
+      hls.on(
+        Hls.Events.AUDIO_TRACK_SWITCHED,
+        (_event, data) => {
+          setCurrentAudioTrack(
+            typeof data.id === "number"
+              ? data.id
+              : hls!.audioTrack
+          );
+        }
+      );
+
+      hls.on(
         Hls.Events.MANIFEST_PARSED,
         () => {
           console.log(
@@ -954,6 +1009,33 @@ export default function WatchPage() {
 
           levels.forEach(
             (level) => {
+              /*
+               * Prefer the generated HLS variant path.
+               * This is important for cinematic sources such as
+               * 1280x544: the 720p rendition is still the 720p
+               * quality tier even though its actual HLS height is 544.
+               */
+              const levelUrl =
+                typeof level.url === "string"
+                  ? level.url
+                  : "";
+
+              const pathMatch =
+                levelUrl.match(
+                  /\/(1080p|720p|480p|360p)\/playlist\.m3u8(?:[?#].*)?$/i
+                );
+
+              if (pathMatch) {
+                detectedQualities.push(
+                  pathMatch[1].toLowerCase()
+                );
+                return;
+              }
+
+              /*
+               * Fallback for HLS configurations where the level URL
+               * is not exposed. Use the actual encoded height.
+               */
               const height =
                 level.height;
 
@@ -1377,6 +1459,7 @@ export default function WatchPage() {
       } else if (event.key === "Escape") {
         setShowSettings(false);
         setShowSubtitlesMenu(false);
+        setShowAudioMenu(false);
       }
 
       revealControls(false);
@@ -1411,20 +1494,39 @@ export default function WatchPage() {
       return;
     }
 
-    const height =
-      Number(
-        quality.replace(
-          "p",
-          ""
-        )
+    const qualityPattern =
+      new RegExp(
+        `\\/${quality}\\/playlist\\.m3u8(?:[?#].*)?$`,
+        "i"
       );
 
-    const levelIndex =
+    let levelIndex =
       hls.levels.findIndex(
         (level) =>
-          level.height ===
-          height
+          typeof level.url === "string" &&
+          qualityPattern.test(level.url)
       );
+
+    /*
+     * Fallback for HLS.js configurations where level.url
+     * is unavailable. This keeps the normal 16:9 case working.
+     */
+    if (levelIndex === -1) {
+      const height =
+        Number(
+          quality.replace(
+            "p",
+            ""
+          )
+        );
+
+      levelIndex =
+        hls.levels.findIndex(
+          (level) =>
+            level.height ===
+            height
+        );
+    }
 
     if (levelIndex === -1) {
       return;
@@ -1437,6 +1539,35 @@ export default function WatchPage() {
      */
     hls.nextLevel =
       levelIndex;
+  }
+
+  /*
+   * Change the active HLS audio track.
+   */
+  function changeAudioTrack(
+    trackId: number
+  ) {
+    const hls =
+      hlsRef.current;
+
+    if (!hls) return;
+
+    if (
+      trackId < 0 ||
+      trackId >= hls.audioTracks.length
+    ) {
+      return;
+    }
+
+    hls.audioTrack =
+      trackId;
+
+    setCurrentAudioTrack(
+      trackId
+    );
+
+    setShowAudioMenu(false);
+    revealControls(false);
   }
 
   /*
@@ -1458,6 +1589,7 @@ export default function WatchPage() {
         setShowControls(false);
         setShowSettings(false);
         setShowSubtitlesMenu(false);
+        setShowAudioMenu(false);
       }, 3000);
     }
   }
@@ -2095,6 +2227,55 @@ export default function WatchPage() {
                 </div>
 
                 <div className="relative flex shrink-0 items-center gap-1 sm:gap-2">
+                  {audioTracks.length > 1 && (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        aria-label="Audio tracks"
+                        aria-expanded={showAudioMenu}
+                        onClick={() => {
+                          setShowAudioMenu((current) => !current);
+                          setShowSettings(false);
+                          setShowSubtitlesMenu(false);
+                          revealControls(false);
+                        }}
+                        className={`flex h-11 items-center gap-1 rounded-full px-2.5 text-xs font-semibold transition hover:bg-white/15 sm:px-3 sm:text-sm ${
+                          showAudioMenu ? "bg-white/15" : ""
+                        }`}
+                      >
+                        A
+                      </button>
+
+                      {showAudioMenu && (
+                        <div className="absolute bottom-12 right-0 w-56 rounded-xl border border-white/10 bg-[#171717]/95 p-2 shadow-2xl backdrop-blur-xl">
+                          <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-white/40">
+                            Audio
+                          </div>
+
+                          {audioTracks.map((track) => (
+                            <button
+                              key={track.id}
+                              type="button"
+                              onClick={() => changeAudioTrack(track.id)}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-white/10 ${
+                                currentAudioTrack === track.id
+                                  ? "text-white"
+                                  : "text-white/60"
+                              }`}
+                            >
+                              <span className="truncate">
+                                {track.label}
+                              </span>
+                              {currentAudioTrack === track.id && (
+                                <span className="ml-3 shrink-0">✓</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {subtitles.length > 0 && (
                     <div className="relative">
                       <button
@@ -2104,6 +2285,7 @@ export default function WatchPage() {
                         onClick={() => {
                           setShowSubtitlesMenu((current) => !current);
                           setShowSettings(false);
+                          setShowAudioMenu(false);
                           revealControls(false);
                         }}
                         className={`flex h-10 items-center gap-1 rounded-full px-2.5 text-xs font-semibold transition hover:bg-white/15 sm:px-3 sm:text-sm ${
@@ -2158,6 +2340,7 @@ export default function WatchPage() {
                       onClick={() => {
                         setShowSettings((current) => !current);
                         setShowSubtitlesMenu(false);
+                        setShowAudioMenu(false);
                         revealControls(false);
                       }}
                       className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-lg transition hover:bg-white/15 active:scale-95"
