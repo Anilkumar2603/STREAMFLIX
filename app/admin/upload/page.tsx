@@ -10,6 +10,7 @@ const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_CONCURRENT = 4;
 const MAX_RETRIES = 3;
 const PROCESSING_POLL_INTERVAL = 3000;
+const R2_WORKER_URL = process.env.NEXT_PUBLIC_R2_WORKER_URL;
 
 type UploadStatus =
   | "idle"
@@ -26,6 +27,10 @@ interface UploadSession {
   fileName: string;
   fileSize: number;
   lastModified: number;
+  storageMode?: "local" | "r2";
+  uploadToken?: string;
+  objectKey?: string;
+  uploadId?: string;
 }
 
 interface UploadStatusResponse {
@@ -273,6 +278,260 @@ const [backgroundProcessing, setBackgroundProcessing] =
     setProcessingFps(null);
     setProcessingStage(null);
     setEncoderUsed(null);
+  }
+
+  // --------------------------------------------------
+  // R2 browser upload helpers
+  // --------------------------------------------------
+
+  async function createR2MultipartUpload(
+    token: string,
+    objectKey: string,
+    contentType: string
+  ) {
+    if (!R2_WORKER_URL) {
+      throw new Error(
+        "R2 Worker URL is not configured."
+      );
+    }
+
+    const url =
+      `${R2_WORKER_URL}/multipart` +
+      `?action=create` +
+      `&key=${encodeURIComponent(objectKey)}` +
+      `&contentType=${encodeURIComponent(contentType)}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+          "Failed to create R2 multipart upload."
+      );
+    }
+
+    if (!data.uploadId) {
+      throw new Error(
+        "R2 Worker did not return an upload ID."
+      );
+    }
+
+    return {
+      uploadId: String(data.uploadId),
+      objectKey: String(data.objectKey || objectKey),
+    };
+  }
+
+  async function getR2UploadedParts(
+    token: string,
+    objectKey: string,
+    uploadId: string
+  ) {
+    if (!R2_WORKER_URL) {
+      throw new Error(
+        "R2 Worker URL is not configured."
+      );
+    }
+
+    const url =
+      `${R2_WORKER_URL}/multipart` +
+      `?action=parts` +
+      `&key=${encodeURIComponent(objectKey)}` +
+      `&uploadId=${encodeURIComponent(uploadId)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+          "Failed to get R2 upload status."
+      );
+    }
+
+    return (data.parts || []) as Array<{
+      partNumber: number;
+      etag: string;
+    }>;
+  }
+
+  async function uploadR2Part(
+    token: string,
+    objectKey: string,
+    uploadId: string,
+    partNumber: number,
+    chunk: Blob
+  ) {
+    if (!R2_WORKER_URL) {
+      throw new Error(
+        "R2 Worker URL is not configured."
+      );
+    }
+
+    const url =
+      `${R2_WORKER_URL}/multipart` +
+      `?action=uploadpart` +
+      `&key=${encodeURIComponent(objectKey)}` +
+      `&uploadId=${encodeURIComponent(uploadId)}` +
+      `&partNumber=${partNumber}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: chunk,
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+          `Failed to upload part ${partNumber}.`
+      );
+    }
+
+    return data as {
+      success: boolean;
+      partNumber: number;
+      etag: string;
+    };
+  }
+
+  async function completeR2MultipartUpload(
+    token: string,
+    objectKey: string,
+    uploadId: string,
+    parts: Array<{
+      partNumber: number;
+      etag: string;
+    }>
+  ) {
+    if (!R2_WORKER_URL) {
+      throw new Error(
+        "R2 Worker URL is not configured."
+      );
+    }
+
+    const url =
+      `${R2_WORKER_URL}/multipart` +
+      `?action=complete` +
+      `&key=${encodeURIComponent(objectKey)}` +
+      `&uploadId=${encodeURIComponent(uploadId)}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        parts,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+          "Failed to finalize R2 multipart upload."
+      );
+    }
+
+    if (!data.completionProof) {
+      throw new Error(
+        "R2 Worker did not return a completion proof."
+      );
+    }
+
+    return data as {
+      success: boolean;
+      key: string;
+      etag: string;
+      size: number;
+      completionProof: string;
+    };
+  }
+
+  async function requestR2UploadCapability(
+    selectedFile: File,
+    videoId?: string
+  ) {
+    const response = await fetch(
+      "/api/videos/upload/start",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: title.trim(),
+          fileName: selectedFile.name,
+          fileSize: selectedFile.size,
+          lastModified: selectedFile.lastModified,
+          contentType:
+            selectedFile.type ||
+            "application/octet-stream",
+          ...(videoId ? { videoId } : {}),
+        }),
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || "Failed to prepare R2 upload."
+      );
+    }
+
+    const returnedVideoId =
+      typeof data.videoId === "string"
+        ? data.videoId
+        : "";
+
+    const uploadToken =
+      typeof data.uploadToken === "string"
+        ? data.uploadToken
+        : "";
+
+    const objectKey =
+      typeof data.objectKey === "string"
+        ? data.objectKey
+        : "";
+
+    if (!returnedVideoId || !uploadToken || !objectKey) {
+      throw new Error(
+        "Upload server did not return the R2 upload capability."
+      );
+    }
+
+    return {
+      videoId: returnedVideoId,
+      uploadToken,
+      objectKey,
+      storageMode:
+        data.storageMode === "r2" ? "r2" : "local",
+      status:
+        typeof data.status === "string"
+          ? data.status
+          : "UPLOADING",
+    } as const;
   }
 
   // --------------------------------------------------
@@ -596,46 +855,54 @@ useEffect(() => {
   async function findExistingUpload(
     selectedFile: File
   ) {
-    const key =
-      getFileKey(
-        selectedFile
-      );
-
-    const saved =
-      localStorage.getItem(
-        key
-      );
+    const key = getFileKey(selectedFile);
+    const saved = localStorage.getItem(key);
 
     if (!saved) {
       return null;
     }
 
     try {
-      const session:
-        UploadSession =
-        JSON.parse(saved);
+      const session = JSON.parse(saved) as UploadSession;
 
       if (
-        session.fileName !==
-          selectedFile.name ||
-        session.fileSize !==
-          selectedFile.size ||
-        session.lastModified !==
-          selectedFile.lastModified
+        session.fileName !== selectedFile.name ||
+        session.fileSize !== selectedFile.size ||
+        session.lastModified !== selectedFile.lastModified
       ) {
         return null;
       }
 
-      const serverStatus =
-        await getUploadStatus(
+      // R2 status is read from PostgreSQL only. We do not call the
+      // server upload-status endpoint because that endpoint would make
+      // a server-side R2 request from this machine.
+      if (session.storageMode === "r2") {
+        const video = await getVideoProcessingStatus(
           session.videoId
         );
 
-      if (!serverStatus) {
-        localStorage.removeItem(
-          key
-        );
+        if (!video) {
+          localStorage.removeItem(key);
+          return null;
+        }
 
+        return {
+          session,
+          serverStatus: {
+            videoId: session.videoId,
+            status: video.status,
+            uploadedChunks: [],
+            storageMode: "r2" as const,
+          },
+        };
+      }
+
+      const serverStatus = await getUploadStatus(
+        session.videoId
+      );
+
+      if (!serverStatus) {
+        localStorage.removeItem(key);
         return null;
       }
 
@@ -644,40 +911,35 @@ useEffect(() => {
         serverStatus,
       };
     } catch {
-      localStorage.removeItem(
-        key
-      );
-
+      localStorage.removeItem(key);
       return null;
     }
   }
 
   function saveSession(
     selectedFile: File,
-    existingVideoId: string
+    sessionData: {
+      videoId: string;
+      storageMode: "local" | "r2";
+      uploadToken?: string;
+      objectKey?: string;
+      uploadId?: string;
+    }
   ) {
-    const session:
-      UploadSession = {
-      videoId:
-        existingVideoId,
-
-      fileName:
-        selectedFile.name,
-
-      fileSize:
-        selectedFile.size,
-
-      lastModified:
-        selectedFile.lastModified,
+    const session: UploadSession = {
+      videoId: sessionData.videoId,
+      fileName: selectedFile.name,
+      fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
+      storageMode: sessionData.storageMode,
+      uploadToken: sessionData.uploadToken,
+      objectKey: sessionData.objectKey,
+      uploadId: sessionData.uploadId,
     };
 
     localStorage.setItem(
-      getFileKey(
-        selectedFile
-      ),
-      JSON.stringify(
-        session
-      )
+      getFileKey(selectedFile),
+      JSON.stringify(session)
     );
   }
 
@@ -697,518 +959,338 @@ useEffect(() => {
 
   async function startUpload() {
     if (!file) {
-      setError(
-        "Please select a video file."
-      );
-
+      setError("Please select a video file.");
       return;
     }
 
     if (!title.trim()) {
-      setError(
-        "Please enter a video title."
-      );
-
+      setError("Please enter a video title.");
       return;
     }
 
-    const selectedFile =
-      file;
-
+    const selectedFile = file;
     setError("");
     setMessage("");
-
-    cancelRef.current =
-      false;
+    cancelRef.current = false;
 
     try {
-      // ----------------------------------------------
-      // 1. Look for existing upload
-      // ----------------------------------------------
+      const existing = await findExistingUpload(selectedFile);
 
-      const existing =
-        await findExistingUpload(
-          selectedFile
-        );
-
-      let currentVideoId:
-        string | null =
-        null;
+      let currentVideoId: string | null = null;
+      let currentStorageMode: "local" | "r2" =
+        existing?.session.storageMode ||
+        (existing?.serverStatus.storageMode === "r2"
+          ? "r2"
+          : "local");
+      let currentUploadToken = existing?.session.uploadToken;
+      let currentObjectKey = existing?.session.objectKey;
+      let currentUploadId = existing?.session.uploadId;
 
       if (existing) {
-        currentVideoId =
-          existing.session.videoId;
+        currentVideoId = existing.session.videoId;
+        setVideoId(currentVideoId);
+        setStorageMode(currentStorageMode);
 
-        setVideoId(
-          currentVideoId
-        );
+        const serverStatus = existing.serverStatus.status;
 
-        const serverStatus =
-          existing.serverStatus.status;
-
-        // --------------------------------------------
-        // Already READY
-        // --------------------------------------------
-
-        if (
-          serverStatus ===
-          "READY"
-        ) {
+        if (serverStatus === "READY") {
           setProgress(100);
-
-          setUploadedBytes(
-            selectedFile.size
-          );
-
+          setUploadedBytes(selectedFile.size);
           setEta(0);
-
-          setStatus(
-            "complete"
-          );
-
+          setStatus("complete");
           setMessage(
             "This video has already been uploaded and processed successfully."
           );
-
           return;
         }
 
-        // --------------------------------------------
-        // Already PROCESSING
-        // --------------------------------------------
-
-        if (
-          serverStatus ===
-          "PROCESSING"
-        ) {
+        if (serverStatus === "PROCESSING") {
           setProgress(0);
-
-          setUploadedBytes(
-            selectedFile.size
-          );
-
+          setUploadedBytes(selectedFile.size);
           setSpeed(0);
-
           setEta(null);
-
           resetProcessingStats();
-
-          setStatus(
-            "processing"
-          );
-
+          setStatus("processing");
           setMessage(
             "This video is already uploaded and is being processed."
           );
-
           return;
         }
 
-        // --------------------------------------------
-        // FAILED
-        // --------------------------------------------
-
-        if (
-          serverStatus ===
-          "FAILED"
-        ) {
-          /*
-           * Don't reuse a failed session.
-           * Remove its local browser session and
-           * allow the server to create a new one.
-           */
-          removeSession(
-            selectedFile
-          );
-
-          currentVideoId =
-            null;
-
+        if (serverStatus === "FAILED") {
+          removeSession(selectedFile);
+          currentVideoId = null;
+          currentUploadToken = undefined;
+          currentObjectKey = undefined;
+          currentUploadId = undefined;
           setVideoId(null);
         }
 
-        // --------------------------------------------
-        // Existing incomplete upload
-        // --------------------------------------------
+        if (serverStatus === "UPLOADING") {
+          setStatus("resuming");
+          setMessage("Previous upload found. Checking uploaded chunks...");
+        }
+      }
 
-        if (
-          serverStatus ===
-          "UPLOADING"
-        ) {
-          setStatus(
-            "resuming"
-          );
+      // Create a new database upload session/capability when needed.
+      if (currentVideoId === null) {
+        setStatus("starting");
+        setMessage("Preparing upload...");
 
-          setUploadedChunks(
-            existing.serverStatus
-              .uploadedChunks
-          );
+        const prepared = await requestR2UploadCapability(
+          selectedFile
+        );
 
-          const bytes =
-            calculateUploadedBytes(
-              existing
-                .serverStatus
-                .uploadedChunks,
-              selectedFile.size
+        currentVideoId = prepared.videoId;
+        currentStorageMode = prepared.storageMode;
+        currentUploadToken = prepared.uploadToken;
+        currentObjectKey = prepared.objectKey;
+
+        setVideoId(currentVideoId);
+        setStorageMode(currentStorageMode);
+
+        if (currentStorageMode === "r2") {
+          if (!currentUploadToken || !currentObjectKey) {
+            throw new Error(
+              "R2 upload session is incomplete."
             );
+          }
 
-          setUploadedBytes(
-            bytes
+          const multipart = await createR2MultipartUpload(
+            currentUploadToken,
+            currentObjectKey,
+            selectedFile.type || "application/octet-stream"
           );
 
-          setProgress(
-            (bytes /
-              selectedFile.size) *
-              100
-          );
+          currentUploadId = multipart.uploadId;
+          currentObjectKey = multipart.objectKey;
 
-          setMessage(
-            `Previous upload found. ${existing.serverStatus.uploadedChunks.length} chunks are already uploaded.`
-          );
+          if (!currentVideoId || !currentUploadId) {
+            throw new Error(
+              "Unable to create R2 upload session."
+            );
+          }
+
+          saveSession(selectedFile, {
+            videoId: currentVideoId,
+            storageMode: "r2",
+            uploadToken: currentUploadToken,
+            objectKey: currentObjectKey,
+            uploadId: currentUploadId,
+          });
+        } else {
+          if (!currentVideoId) {
+            throw new Error(
+              "Unable to create upload session."
+            );
+          }
+
+          saveSession(selectedFile, {
+            videoId: currentVideoId,
+            storageMode: "local",
+          });
         }
-      }
-
-      // ----------------------------------------------
-      // 2. Create new upload
-      // ----------------------------------------------
-
-      if (
-        currentVideoId ===
-        null
-      ) {
-        setStatus(
-          "starting"
-        );
-
-        setMessage(
-          "Preparing upload..."
-        );
-
-        const startResponse =
-          await fetch(
-            "/api/videos/upload/start",
-            {
-              method:
-                "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-
-              body: JSON.stringify(
-                {
-                  title:
-                    title.trim(),
-
-                  fileName:
-                    selectedFile.name,
-
-                  fileSize:
-                    selectedFile.size,
-
-                  lastModified:
-                    selectedFile.lastModified,
-                  contentType:
-      selectedFile.type ||
-      "application/octet-stream",
-                }
-              ),
-            }
-          );
-
-        const startData =
-          await startResponse.json();
-          const currentStorageMode =
-  startData.storageMode === "r2" ? "r2" : "local";
-
-setStorageMode(currentStorageMode);
-        if (
-  startData.storageMode === "r2" ||
-  startData.storageMode === "local"
-) {
-  setStorageMode(
-    startData.storageMode
-  );
-}  
-        if (
-          !startResponse.ok
-        ) {
-          throw new Error(
-            startData.error ||
-              "Failed to start upload."
-          );
-        }
-
-        const newVideoId =
-          startData.videoId;
-
-        if (
-          typeof newVideoId !==
-            "string" ||
-          !newVideoId
-        ) {
-          throw new Error(
-            "Server did not return a valid video ID."
-          );
-        }
-
-        currentVideoId =
-          newVideoId;
-
-        setVideoId(
-          newVideoId
-        );
-
-        saveSession(
+      } else if (currentStorageMode === "r2") {
+        // Refresh the short-lived capability on every resume.
+        // This never exposes the master R2 token.
+        const prepared = await requestR2UploadCapability(
           selectedFile,
-          newVideoId
+          currentVideoId
         );
+
+        currentUploadToken = prepared.uploadToken;
+        currentObjectKey = prepared.objectKey;
+
+        if (!currentUploadToken || !currentObjectKey) {
+          throw new Error("R2 upload session is incomplete.");
+        }
+
+        // Old browser sessions may not have an upload ID because the
+        // browser-direct R2 flow was introduced after they were created.
+        // In that case start a fresh multipart upload for this browser session.
+        if (!currentUploadId) {
+          const multipart = await createR2MultipartUpload(
+            currentUploadToken,
+            currentObjectKey,
+            selectedFile.type || "application/octet-stream"
+          );
+          currentUploadId = multipart.uploadId;
+          currentObjectKey = multipart.objectKey;
+        }
+
+        saveSession(selectedFile, {
+          videoId: currentVideoId,
+          storageMode: "r2",
+          uploadToken: currentUploadToken,
+          objectKey: currentObjectKey,
+          uploadId: currentUploadId,
+        });
       }
 
-      // ----------------------------------------------
-      // 3. Guaranteed video ID
-      // ----------------------------------------------
-
-      if (
-        currentVideoId ===
-        null
-      ) {
-        throw new Error(
-          "Unable to create upload session."
-        );
+      if (!currentVideoId) {
+        throw new Error("Unable to create upload session.");
       }
 
-      const uploadVideoId:
-        string =
-        currentVideoId;
-
-      const statusData =
-        await getUploadStatus(
-          uploadVideoId
-        );
-
-      if (!statusData) {
-        throw new Error(
-          "Unable to check upload progress."
-        );
-      }
-
-      const completed =
-        new Set(
-          statusData.uploadedChunks
-        );
-
-      setUploadedChunks(
-        Array.from(
-          completed
-        )
+      const uploadVideoId = currentVideoId;
+      const totalChunks = Math.ceil(
+        selectedFile.size / CHUNK_SIZE
       );
 
-      const initialBytes =
-        calculateUploadedBytes(
-          Array.from(
-            completed
-          ),
-          selectedFile.size
-        );
+      let completed = new Set<number>();
 
-      setUploadedBytes(
-        initialBytes
-      );
-
-      setProgress(
-        (initialBytes /
-          selectedFile.size) *
-          100
-      );
-
-      // ----------------------------------------------
-      // 4. Find missing chunks
-      // ----------------------------------------------
-
-      const totalChunks =
-        Math.ceil(
-          selectedFile.size /
-            CHUNK_SIZE
-        );
-
-      const pendingChunks:
-        number[] = [];
-
-      for (
-        let i = 0;
-        i < totalChunks;
-        i++
-      ) {
+      if (currentStorageMode === "r2") {
         if (
-          !completed.has(i)
+          !currentUploadToken ||
+          !currentObjectKey ||
+          !currentUploadId
         ) {
+          throw new Error("R2 upload session is incomplete.");
+        }
+
+        const parts = await getR2UploadedParts(
+          currentUploadToken,
+          currentObjectKey,
+          currentUploadId
+        );
+
+        completed = new Set(
+          parts
+            .map((part) => part.partNumber - 1)
+            .filter(
+              (index) =>
+                Number.isInteger(index) &&
+                index >= 0 &&
+                index < totalChunks
+            )
+        );
+      } else {
+        const statusData = await getUploadStatus(uploadVideoId);
+
+        if (!statusData) {
+          throw new Error("Unable to check upload progress.");
+        }
+
+        completed = new Set(statusData.uploadedChunks);
+      }
+
+      setUploadedChunks(Array.from(completed).sort((a, b) => a - b));
+
+      const initialBytes = calculateUploadedBytes(
+        Array.from(completed),
+        selectedFile.size
+      );
+
+      setUploadedBytes(initialBytes);
+      setProgress(
+        selectedFile.size > 0
+          ? (initialBytes / selectedFile.size) * 100
+          : 0
+      );
+
+      const pendingChunks: number[] = [];
+
+      for (let i = 0; i < totalChunks; i++) {
+        if (!completed.has(i)) {
           pendingChunks.push(i);
         }
       }
 
-      // ----------------------------------------------
-      // 5. Upload missing chunks
-      // ----------------------------------------------
-
-      if (
-        pendingChunks.length >
-        0
-      ) {
-        setStatus(
-          "uploading"
-        );
-
+      if (pendingChunks.length > 0) {
+        setStatus("uploading");
         setMessage(
           completed.size > 0
             ? `Resuming upload... ${completed.size} chunks already uploaded.`
             : "Uploading video..."
         );
 
-        startTimeRef.current =
-          Date.now();
+        startTimeRef.current = Date.now();
 
         let nextIndex = 0;
 
-        async function uploadChunk(
-          chunkIndex: number
-        ) {
-          if (
-            cancelRef.current
-          ) {
-            throw new Error(
-              "Upload cancelled."
-            );
+        async function uploadChunk(chunkIndex: number) {
+          if (cancelRef.current) {
+            throw new Error("Upload cancelled.");
           }
 
-          const chunkStart =
-            chunkIndex *
-            CHUNK_SIZE;
+          const chunkStart = chunkIndex * CHUNK_SIZE;
+          const chunkEnd = Math.min(
+            chunkStart + CHUNK_SIZE,
+            selectedFile.size
+          );
+          const chunkBlob = selectedFile.slice(chunkStart, chunkEnd);
 
-          const chunkEnd =
-            Math.min(
-              chunkStart +
-                CHUNK_SIZE,
-              selectedFile.size
-            );
-
-          const chunkBlob =
-            selectedFile.slice(
-              chunkStart,
-              chunkEnd
-            );
-
-          let lastError:
-            unknown = null;
+          let lastError: unknown = null;
 
           for (
             let attempt = 1;
-            attempt <=
-            MAX_RETRIES;
+            attempt <= MAX_RETRIES;
             attempt++
           ) {
-            if (
-              cancelRef.current
-            ) {
-              throw new Error(
-                "Upload cancelled."
-              );
+            if (cancelRef.current) {
+              throw new Error("Upload cancelled.");
             }
 
             try {
-              let response: Response;
+              if (currentStorageMode === "r2") {
+                if (
+                  !currentUploadToken ||
+                  !currentObjectKey ||
+                  !currentUploadId
+                ) {
+                  throw new Error(
+                    "R2 upload session is incomplete."
+                  );
+                }
 
-if (storageMode === "r2") {
-  // Ask our server for a presigned R2 upload URL
-  const urlResponse = await fetch("/api/videos/upload/chunk", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      videoId: uploadVideoId,
-      chunkIndex,
-    }),
-  });
-
-  const urlData = await urlResponse.json();
-
-  if (!urlResponse.ok) {
-    throw new Error(
-      urlData.error || "Failed to get R2 upload URL"
-    );
-  }
-
-  if (!urlData.uploadUrl) {
-    throw new Error("R2 upload URL was not returned");
-  }
-
-  // Upload the actual chunk directly to R2
-  response = await fetch(urlData.uploadUrl, {
-    method: "PUT",
-    body: chunkBlob,
-  });
-} else {
-  // Existing local-disk upload flow
-  const formData = new FormData();
-  formData.append("videoId", uploadVideoId);
-  formData.append("chunkIndex", String(chunkIndex));
-  formData.append("chunk", chunkBlob);
-
-  response = await fetch("/api/videos/upload/chunk", {
-    method: "POST",
-    body: formData,
-  });
-}
-
-              if (
-                !response.ok
-              ) {
-                let errorMessage =
-                  "Chunk upload failed.";
-
-                try {
-                  const data =
-                    await response.json();
-
-                  errorMessage =
-                    data.error ||
-                    errorMessage;
-                } catch {}
-
-                throw new Error(
-                  errorMessage
+                await uploadR2Part(
+                  currentUploadToken,
+                  currentObjectKey,
+                  currentUploadId,
+                  chunkIndex + 1,
+                  chunkBlob
                 );
+
+                return;
+              }
+
+                
+              else {
+                const formData = new FormData();
+                formData.append("videoId", uploadVideoId);
+                formData.append("chunkIndex", String(chunkIndex));
+                formData.append("chunk", chunkBlob);
+
+                const response = await fetch(
+                  "/api/videos/upload/chunk",
+                  {
+                    method: "POST",
+                    body: formData,
+                  }
+                );
+
+                if (!response.ok) {
+                  let errorMessage = "Chunk upload failed.";
+                  try {
+                    const data = await response.json();
+                    errorMessage = data.error || errorMessage;
+                  } catch {}
+                  throw new Error(errorMessage);
+                }
               }
 
               return;
-            } catch (
-              error
-            ) {
-              lastError =
-                error;
+            } catch (error) {
+              lastError = error;
 
-              if (
-                attempt <
-                MAX_RETRIES
-              ) {
-                await new Promise(
-                  (
-                    resolve
-                  ) =>
-                    setTimeout(
-                      resolve,
-                      1000 *
-                        attempt
-                    )
+              if (attempt < MAX_RETRIES) {
+                await new Promise((resolve) =>
+                  setTimeout(resolve, 1000 * attempt)
                 );
               }
             }
           }
 
-          throw lastError instanceof
-            Error
+          throw lastError instanceof Error
             ? lastError
             : new Error(
                 `Failed to upload chunk ${chunkIndex}.`
@@ -1217,210 +1299,188 @@ if (storageMode === "r2") {
 
         async function uploadWorker() {
           while (true) {
-            if (
-              cancelRef.current
-            ) {
-              throw new Error(
-                "Upload cancelled."
-              );
+            if (cancelRef.current) {
+              throw new Error("Upload cancelled.");
             }
 
-            const position =
-              nextIndex++;
-
-            if (
-              position >=
-              pendingChunks.length
-            ) {
+            const position = nextIndex++;
+            if (position >= pendingChunks.length) {
               return;
             }
 
-            const chunkIndex =
-              pendingChunks[
-                position
-              ];
+            const chunkIndex = pendingChunks[position];
+            await uploadChunk(chunkIndex);
 
-            await uploadChunk(
-              chunkIndex
-            );
+            completed.add(chunkIndex);
 
-            completed.add(
-              chunkIndex
-            );
-
-            const currentBytes =
-              calculateUploadedBytes(
-                Array.from(
-                  completed
-                ),
-                selectedFile.size
-              );
-
-            setUploadedChunks(
-              Array.from(
-                completed
-              )
-            );
-
-            setUploadedBytes(
-              currentBytes
-            );
-
-            setProgress(
-              (currentBytes /
-                selectedFile.size) *
-                100
-            );
-
-            calculateStats(
-              currentBytes,
+            const currentBytes = calculateUploadedBytes(
+              Array.from(completed),
               selectedFile.size
             );
+
+            const sortedChunks = Array.from(completed).sort(
+              (a, b) => a - b
+            );
+
+            setUploadedChunks(sortedChunks);
+            setUploadedBytes(currentBytes);
+            setProgress(
+              selectedFile.size > 0
+                ? (currentBytes / selectedFile.size) * 100
+                : 0
+            );
+            calculateStats(currentBytes, selectedFile.size);
           }
         }
 
-        const workerCount =
-          Math.min(
-            MAX_CONCURRENT,
-            pendingChunks.length
-          );
+        const workerCount = Math.min(
+          MAX_CONCURRENT,
+          pendingChunks.length
+        );
 
         await Promise.all(
           Array.from(
-            {
-              length:
-                workerCount,
-            },
-            () =>
-              uploadWorker()
+            { length: workerCount },
+            () => uploadWorker()
           )
         );
       }
 
-      // ----------------------------------------------
-      // 6. Cancel check
-      // ----------------------------------------------
-
-      if (
-        cancelRef.current
-      ) {
-        setStatus(
-          "cancelled"
-        );
-
+      if (cancelRef.current) {
+        setStatus("cancelled");
         setMessage(
           "Upload stopped. Your uploaded chunks are saved and can be resumed."
         );
-
         return;
       }
 
       // ----------------------------------------------
-      // 7. Finalize upload
+      // Finalize upload
       // ----------------------------------------------
 
-      setMessage(
-        "Finalizing upload..."
-      );
+      setMessage("Finalizing upload...");
 
-      const completeResponse =
-        await fetch(
+      if (currentStorageMode === "r2") {
+        if (
+          !currentUploadToken ||
+          !currentObjectKey ||
+          !currentUploadId
+        ) {
+          throw new Error("R2 upload session is incomplete.");
+        }
+
+        const parts = await getR2UploadedParts(
+          currentUploadToken,
+          currentObjectKey,
+          currentUploadId
+        );
+
+        if (parts.length !== totalChunks) {
+          throw new Error(
+            `R2 upload is missing parts. Expected ${totalChunks}, found ${parts.length}.`
+          );
+        }
+
+        for (let i = 1; i <= totalChunks; i++) {
+          const part = parts.find(
+            (item) => item.partNumber === i
+          );
+          if (!part) {
+            throw new Error(
+              `R2 upload is missing part ${i}.`
+            );
+          }
+        }
+
+        const workerComplete =
+          await completeR2MultipartUpload(
+            currentUploadToken,
+            currentObjectKey,
+            currentUploadId,
+            parts.sort(
+              (a, b) => a.partNumber - b.partNumber
+            )
+          );
+
+        const completeResponse = await fetch(
           "/api/videos/upload/complete",
           {
-            method:
-              "POST",
-
+            method: "POST",
             headers: {
-              "Content-Type":
-                "application/json",
+              "Content-Type": "application/json",
             },
-
-            body: JSON.stringify(
-              {
-                videoId:
-                  uploadVideoId,
-
-                fileName:
-                  selectedFile.name,
-
-                totalChunks,
-              }
-            ),
+            body: JSON.stringify({
+              videoId: uploadVideoId,
+              fileName: selectedFile.name,
+              totalChunks,
+              completionProof:
+                workerComplete.completionProof,
+            }),
           }
         );
 
-      const completeData =
-        await completeResponse.json();
+        const completeData = await completeResponse
+          .json()
+          .catch(() => ({}));
 
-      if (
-        !completeResponse.ok
-      ) {
-        throw new Error(
-          completeData.error ||
-            "Failed to finalize upload."
+        if (!completeResponse.ok) {
+          throw new Error(
+            completeData.error ||
+              "Failed to finalize upload."
+          );
+        }
+      } else {
+        const completeResponse = await fetch(
+          "/api/videos/upload/complete",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              videoId: uploadVideoId,
+              fileName: selectedFile.name,
+              totalChunks,
+            }),
+          }
         );
+
+        const completeData = await completeResponse
+          .json()
+          .catch(() => ({}));
+
+        if (!completeResponse.ok) {
+          throw new Error(
+            completeData.error ||
+              "Failed to finalize upload."
+          );
+        }
       }
 
-      // ----------------------------------------------
-      // 8. Upload complete → Processing begins
-      // ----------------------------------------------
-
       setProgress(0);
-
-      setUploadedBytes(
-        selectedFile.size
-      );
-
+      setUploadedBytes(selectedFile.size);
       setSpeed(0);
-
       setEta(null);
-
       resetProcessingStats();
-
-      setStatus(
-        "processing"
-      );
-
+      setStatus("processing");
       setMessage(
         "Upload complete. Video processing has started."
       );
-
-      /*
-       * Important:
-       *
-       * We DO NOT remove the session here until
-       * processing is complete.
-       *
-       * That means if the browser is refreshed,
-       * selecting the same file can still identify
-       * the video being processed.
-       */
     } catch (error) {
-      console.error(
-        "Upload error:",
-        error
-      );
+      console.error("Upload error:", error);
 
       if (
         error instanceof Error &&
-        error.message ===
-          "Upload cancelled."
+        error.message === "Upload cancelled."
       ) {
-        setStatus(
-          "cancelled"
-        );
-
+        setStatus("cancelled");
         setMessage(
           "Upload stopped. Your uploaded chunks are saved and can be resumed."
         );
-
         return;
       }
 
-      setStatus(
-        "error"
-      );
-
+      setStatus("error");
       setError(
         error instanceof Error
           ? error.message
@@ -1471,6 +1531,8 @@ if (storageMode === "r2") {
     setTitle("");
 
     setVideoId(null);
+
+    setStorageMode("local");
 
     setUploadedChunks(
       []
@@ -1888,9 +1950,6 @@ if (storageMode === "r2") {
                       {video.processingStage ===
                       "GENERATING_THUMBNAIL"
                         ? "Generating thumbnail"
-                        : video.processingStage ===
-                          "UPLOADING_TO_R2"
-                        ? "Uploading HLS to R2"
                         : "Transcoding"}
                     </p>
                   </div>
@@ -2194,9 +2253,6 @@ if (storageMode === "r2") {
                         ? processingStage ===
                           "GENERATING_THUMBNAIL"
                           ? "Generating thumbnail"
-                          : processingStage ===
-                            "UPLOADING_TO_R2"
-                          ? "Uploading HLS to R2"
                           : "Processing video"
                         : status ===
                           "complete"
@@ -2220,9 +2276,6 @@ if (storageMode === "r2") {
                             : processingStage ===
                               "GENERATING_THUMBNAIL"
                             ? "Creating preview artwork"
-                            : processingStage ===
-                              "UPLOADING_TO_R2"
-                            ? "Uploading HLS streams to R2"
                             : processingStage}
                         </p>
                       )}
@@ -2365,10 +2418,7 @@ if (storageMode === "r2") {
 
                     <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                       <p className="text-xs text-slate-500">
-                        {processingStage ===
-                        "UPLOADING_TO_R2"
-                          ? "Upload Speed"
-                          : "Encode Speed"}
+                        Encode Speed
                       </p>
 
                       <p className="mt-1 text-sm font-semibold text-white">
@@ -2399,18 +2449,6 @@ if (storageMode === "r2") {
                   </div>
                 )}
 
-                {/* R2 UPLOAD INFORMATION */}
-
-                {status ===
-                  "processing" &&
-                  processingStage ===
-                    "UPLOADING_TO_R2" && (
-                  <div className="mt-3 rounded-xl border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-xs text-blue-300">
-                    HLS video, audio, playlists and initialization
-                    files are being uploaded to R2.
-                  </div>
-                )}
-
                 {/* Processing secondary information */}
 
                 {status ===
@@ -2424,20 +2462,16 @@ if (storageMode === "r2") {
                     </span>
 
                     <span>
-                      {processingStage ===
-                      "UPLOADING_TO_R2"
-                        ? "Uploading HLS streams to R2"
-                        : `FPS ${
-                            processingFps !==
-                              null &&
-                            Number.isFinite(
-                              processingFps
-                            )
-                              ? processingFps.toFixed(
-                                  1
-                                )
-                              : "--"
-                          }`}
+                      FPS{" "}
+                      {processingFps !==
+                        null &&
+                      Number.isFinite(
+                        processingFps
+                      )
+                        ? processingFps.toFixed(
+                            1
+                          )
+                        : "--"}
                     </span>
                   </div>
                 )}
