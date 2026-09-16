@@ -70,23 +70,32 @@ export async function GET(
     if (
       storageMode === "r2"
     ) {
-      if (
-        video.status !==
-        "UPLOADING"
-      ) {
-        return NextResponse.json({
-          videoId,
-          status:
-            video.status,
-          uploadedChunks: [],
-          storageMode,
-        });
-      }
+      if (video.status !== "UPLOADING") {
+  return NextResponse.json({
+    videoId,
+    status: video.status,
+    uploadedChunks: [],
+    storageMode,
+  });
+}
 
-      const state =
-        await getUploadState(
-          videoId
-        );
+let state;
+
+try {
+  state = await getUploadState(videoId);
+} catch (error) {
+  console.warn(
+    "Upload state no longer exists. Returning empty upload status.",
+    error
+  );
+
+  return NextResponse.json({
+    videoId,
+    status: video.status,
+    uploadedChunks: [],
+    storageMode,
+  });
+}
 
       const parts =
         await listAllParts(
