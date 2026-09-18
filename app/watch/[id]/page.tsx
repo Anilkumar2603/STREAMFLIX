@@ -2082,6 +2082,7 @@ export default function WatchPage() {
           >
             <video aria-label="Video player"
               ref={videoRef}
+              crossOrigin="anonymous"
               playsInline
               preload="auto"
               className="h-full w-full object-contain"

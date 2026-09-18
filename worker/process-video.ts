@@ -697,6 +697,7 @@ type ProbeResult = {
   streams?: Array<{
     index?: number;
     codec_type?: string;
+    codec_name?: string;
     width?: number;
     height?: number;
     r_frame_rate?: string;
@@ -723,6 +724,13 @@ type AudioTrack = {
   isDefault: boolean;
 };
 
+type EmbeddedSubtitle = {
+  sourceIndex: number;
+  language: string;
+  title: string;
+  codec: string;
+};
+
 type Variant = {
   name: string;
   width: number;
@@ -743,33 +751,33 @@ const ALL_VARIANTS: Variant[] = [
     name: "1080p",
     width: 1920,
     height: 1080,
-    bitrate: "5000k",
-    maxrate: "5350k",
-    bufsize: "7500k",
+    bitrate: "2500k",
+    maxrate: "2675k",
+    bufsize: "3750k",
   },
   {
     name: "720p",
     width: 1280,
     height: 720,
-    bitrate: "700k",
-    maxrate: "749k",
-    bufsize: "1050k",
+    bitrate: "1400k",
+    maxrate: "1498k",
+    bufsize: "2100k",
   },
   {
     name: "480p",
     width: 854,
     height: 480,
-    bitrate: "100k",
-    maxrate: "149k",
-    bufsize: "450k",
+    bitrate: "700k",
+    maxrate: "749k",
+    bufsize: "1050k",
   },
   {
     name: "360p",
     width: 640,
     height: 360,
-    bitrate: "40k",
-    maxrate: "42k",
-    bufsize: "60k",
+    bitrate: "400k",
+    maxrate: "428k",
+    bufsize: "600k",
   },
 ];
 
@@ -804,6 +812,12 @@ async function getVideoInfo(
     streams.filter(
       (stream) =>
         stream.codec_type === "audio"
+    );
+
+  const subtitleStreams =
+    streams.filter(
+      (stream) =>
+        stream.codec_type === "subtitle"
     );
 
   if (!videoStream) {
@@ -896,11 +910,35 @@ async function getVideoInfo(
     });
   }
 
+  const embeddedSubtitles: EmbeddedSubtitle[] =
+    subtitleStreams.map(
+      (stream, index) => {
+        const language =
+          stream.tags?.language?.trim() || "und";
+
+        const title =
+          stream.tags?.title?.trim() ||
+          (language !== "und"
+            ? language.toUpperCase()
+            : `Subtitle ${index + 1}`);
+
+        return {
+          sourceIndex:
+            stream.index ?? index,
+          language,
+          title,
+          codec:
+            stream.codec_name?.trim() || "unknown",
+        };
+      }
+    );
+
   return {
     width,
     height,
     hasAudio: audioTracks.length > 0,
     audioTracks,
+    embeddedSubtitles,
     fps:
       videoStream.r_frame_rate ??
       "30/1",
@@ -1124,21 +1162,45 @@ function buildFFmpegArgs(
    * as a separate HLS alternate-audio rendition.
    */
   audioTracks.forEach(
-    (track, index) => {
-      args.push(
-        "-map",
-        `0:${track.sourceIndex}`,
-        `-c:a:${index}`,
-        "aac",
-        `-b:a:${index}`,
-        "96k",
-        `-metadata:s:a:${index}`,
-        `language=${track.language}`,
-        `-metadata:s:a:${index}`,
-        `title=${track.title}`
-      );
-    }
-  );
+  (track, index) => {
+    args.push(
+      // Map the original audio stream by its absolute source index.
+      "-map",
+      `0:${track.sourceIndex}`,
+
+      // Web-compatible AAC-LC audio.
+      `-c:a:${index}`,
+      "aac",
+
+      // Explicitly use AAC-LC profile.
+      `-profile:a:${index}`,
+      "aac_low",
+
+      // Normalize all tracks to a common sample rate.
+      `-ar:a:${index}`,
+      "48000",
+
+      // Normalize all tracks to stereo.
+      // This avoids browser/MSE problems with unusual
+      // channel layouts such as 5.1/7.1.
+      `-ac:a:${index}`,
+      "2",
+
+      // Good quality for streaming audio.
+      `-b:a:${index}`,
+      "128k",
+
+      // Preserve source language metadata.
+      `-metadata:s:a:${index}`,
+      `language=${track.language}`,
+
+      // Preserve source title.
+      `-metadata:s:a:${index}`,
+      `title=${track.title}`
+    );
+  }
+);
+
 
   /*
    * Map every encoded video rendition after the
@@ -1837,6 +1899,332 @@ async function encodeWithEncoder(
 }
 
 /* =========================================================
+   EMBEDDED SUBTITLES
+   ========================================================= */
+
+/*
+ * Embedded text subtitle codecs that FFmpeg can convert to WebVTT.
+ *
+ * Bitmap/image subtitles (for example PGS/VobSub) are intentionally
+ * not converted here because that would require OCR and can change
+ * the subtitle content.
+ */
+const TEXT_SUBTITLE_CODECS = new Set([
+  "subrip",
+  "srt",
+  "ass",
+  "ssa",
+  "webvtt",
+  "mov_text",
+  "text",
+  "microdvd",
+  "mpl2",
+  "jacosub",
+  "sami",
+  "stl",
+  "realtext",
+  "subviewer",
+  "subviewer1",
+  "vplayer",
+  "ttml",
+]);
+
+function safeSubtitleLanguage(
+  value: string,
+  index: number
+) {
+  const normalized =
+    value.trim().toLowerCase();
+
+  if (/^[a-z]{2,3}$/.test(normalized)) {
+    return normalized;
+  }
+
+  return `und${index + 1}`;
+}
+
+function safeSubtitleFilePart(
+  value: string,
+  fallback: string
+) {
+  const result =
+    value
+      .trim()
+      .replace(
+        /[^a-zA-Z0-9_-]+/g,
+        "_"
+      )
+      .replace(
+        /^_+|_+$/g,
+        "");
+
+  return result || fallback;
+}
+
+function subtitleLabel(
+  language: string,
+  title: string
+) {
+  const names: Record<string, string> = {
+    en: "English",
+    te: "Telugu",
+    hi: "Hindi",
+    ta: "Tamil",
+    kn: "Kannada",
+    ml: "Malayalam",
+    eng: "English",
+    tel: "Telugu",
+    hin: "Hindi",
+    tam: "Tamil",
+    kan: "Kannada",
+    mal: "Malayalam",
+  };
+
+  return (
+    title ||
+    names[language] ||
+    language.toUpperCase()
+  );
+}
+
+async function extractEmbeddedSubtitles(
+  videoId: string,
+  inputPath: string,
+  outputDir: string,
+  subtitles: EmbeddedSubtitle[]
+) {
+  if (subtitles.length === 0) {
+    console.log(
+      "Embedded subtitles: none detected."
+    );
+
+    return [] as Array<{
+      language: string;
+      label: string;
+      fileName: string;
+      filePath: string;
+    }>;
+  }
+
+  const subtitleDir =
+    path.join(
+      outputDir,
+      "subtitles"
+    );
+
+  await fs.mkdir(
+    subtitleDir,
+    { recursive: true }
+  );
+
+  const results: Array<{
+    language: string;
+    label: string;
+    fileName: string;
+    filePath: string;
+  }> = [];
+
+  const usedLanguages =
+    new Set<string>();
+
+  console.log("");
+  console.log(
+    "================================"
+  );
+  console.log(
+    `EMBEDDED SUBTITLES DETECTED: ${subtitles.length}`
+  );
+  console.log(
+    "================================"
+  );
+
+  for (
+    let index = 0;
+    index < subtitles.length;
+    index++
+  ) {
+    const subtitle =
+      subtitles[index];
+
+    const codec =
+      subtitle.codec.toLowerCase();
+
+    console.log(
+      `Subtitle ${index + 1}: ${subtitle.title} ` +
+      `(${subtitle.language}, codec=${codec}, ` +
+      `stream=${subtitle.sourceIndex})`
+    );
+
+    if (
+      !TEXT_SUBTITLE_CODECS.has(codec)
+    ) {
+      console.warn(
+        `Skipping embedded subtitle ${index + 1}: ` +
+        `codec ${codec} cannot be exported directly to WebVTT.`
+      );
+      continue;
+    }
+
+    let language =
+      safeSubtitleLanguage(
+        subtitle.language,
+        index
+      );
+
+    const baseLanguage =
+      language;
+
+    let suffix = 1;
+
+    while (
+      usedLanguages.has(language)
+    ) {
+      suffix++;
+
+      language =
+        `${baseLanguage.slice(
+          0,
+          Math.max(
+            1,
+            5 -
+              String(
+                suffix
+              ).length
+          )
+        )}${suffix}`;
+    }
+
+    usedLanguages.add(
+      language
+    );
+
+    const label =
+      subtitleLabel(
+        language,
+        subtitle.title
+      );
+
+    const filePart =
+      safeSubtitleFilePart(
+        subtitle.title,
+        `subtitle_${index + 1}`
+      );
+
+    const fileName =
+      `${index + 1}_${language}_${filePart}.vtt`;
+
+    const outputPath =
+      path.join(
+        subtitleDir,
+        fileName
+      );
+
+    try {
+      await execFileAsync(
+        "ffmpeg",
+        [
+          "-y",
+          "-i",
+          inputPath,
+          "-map",
+          `0:${subtitle.sourceIndex}`,
+          "-c:s",
+          "webvtt",
+          outputPath,
+        ],
+        {
+          maxBuffer:
+            1024 * 1024 * 10,
+        }
+      );
+
+      const stat =
+        await fs.stat(
+          outputPath
+        );
+
+      if (stat.size === 0) {
+        throw new Error(
+          "FFmpeg produced an empty WebVTT file."
+        );
+      }
+
+      results.push({
+        language,
+        label,
+        fileName,
+        filePath:
+          `/media/streams/${videoId}/subtitles/${fileName}`,
+      });
+
+      console.log(
+        `Embedded subtitle converted: ${fileName}`
+      );
+    } catch (error) {
+      console.error(
+        `Failed to convert embedded subtitle ${index + 1}:`,
+        error
+      );
+
+      await fs.rm(
+        outputPath,
+        { force: true }
+      );
+    }
+  }
+
+  return results;
+}
+
+async function saveEmbeddedSubtitleRecords(
+  videoId: string,
+  subtitles: Array<{
+    language: string;
+    label: string;
+    fileName: string;
+    filePath: string;
+  }>,
+  isR2: boolean
+) {
+  for (
+    const subtitle of subtitles
+  ) {
+    const filePath =
+      isR2
+        ? subtitle.filePath
+        : `/streams/${videoId}/subtitles/${subtitle.fileName}`;
+
+    await prisma.subtitle.upsert({
+      where: {
+        videoId_language: {
+          videoId,
+          language:
+            subtitle.language,
+        },
+      },
+      update: {
+        label:
+          subtitle.label,
+        filePath,
+      },
+      create: {
+        videoId,
+        language:
+          subtitle.language,
+        label:
+          subtitle.label,
+        filePath,
+      },
+    });
+
+    console.log(
+      `Subtitle DB record created: ` +
+      `${subtitle.label} -> ${filePath}`
+    );
+  }
+}
+
+/* =========================================================
    THUMBNAIL
    ========================================================= */
 
@@ -2260,7 +2648,27 @@ export async function processVideo(
     }
 
     /* =====================================================
-       7. UPLOAD HLS ONLY
+       7. EXTRACT EMBEDDED TEXT SUBTITLES
+       ===================================================== */
+
+    const embeddedSubtitleFiles =
+      await extractEmbeddedSubtitles(
+        videoId,
+        inputPath,
+        outputDir,
+        info.embeddedSubtitles
+      );
+
+    if (!isR2) {
+      await saveEmbeddedSubtitleRecords(
+        videoId,
+        embeddedSubtitleFiles,
+        false
+      );
+    }
+
+    /* =====================================================
+       8. UPLOAD HLS + EMBEDDED SUBTITLES
        ===================================================== */
 
     if (isR2) {
@@ -2304,6 +2712,67 @@ export async function processVideo(
         "R2 HLS upload completed successfully."
       );
 
+      if (
+        embeddedSubtitleFiles.length > 0
+      ) {
+        const subtitleDir =
+          path.join(
+            outputDir,
+            "subtitles"
+          );
+
+        console.log("");
+        console.log(
+          "================================"
+        );
+        console.log(
+          "UPLOADING EMBEDDED SUBTITLES TO R2"
+        );
+        console.log(
+          "================================"
+        );
+
+        for (
+          const subtitle of embeddedSubtitleFiles
+        ) {
+          const localSubtitlePath =
+            path.join(
+              subtitleDir,
+              subtitle.fileName
+            );
+
+          await uploadFileToR2(
+            localSubtitlePath,
+            `streams/${videoId}/subtitles/${subtitle.fileName}`,
+            "text/vtt; charset=utf-8"
+          );
+
+          console.log(
+            `Embedded subtitle uploaded: ` +
+            `streams/${videoId}/subtitles/${subtitle.fileName}`
+          );
+        }
+
+        await saveEmbeddedSubtitleRecords(
+          videoId,
+          embeddedSubtitleFiles,
+          true
+        );
+
+        await fs.rm(
+          subtitleDir,
+          {
+            recursive: true,
+            force: true,
+          }
+        );
+
+        console.log(
+          `Embedded subtitles available: ` +
+          `${embeddedSubtitleFiles.length}`
+        );
+      }
+
       /*
        * IMPORTANT:
        *
@@ -2317,7 +2786,7 @@ export async function processVideo(
     }
 
     /* =====================================================
-       8. MARK VIDEO READY
+       9. MARK VIDEO READY
        ===================================================== */
 
     await prisma.video.update({
