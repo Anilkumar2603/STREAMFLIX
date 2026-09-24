@@ -63,11 +63,12 @@ export async function PATCH(
   request: Request,
   { params }: RouteContext
 ) {
-    const admin = await requireAdminApi();
+  const admin = await requireAdminApi();
 
   if (admin instanceof Response) {
     return admin;
   }
+
   try {
     const { id } = await params;
 
@@ -94,10 +95,6 @@ export async function PATCH(
       published,
     } = body;
 
-    /*
-     * Build update object only from fields that
-     * were actually supplied.
-     */
     const data: {
       title?: string;
       description?: string | null;
@@ -190,41 +187,16 @@ export async function PATCH(
     }
 
     /*
-     * If this video is being made Featured,
-     * remove Featured from the other videos.
+     * IMPORTANT:
      *
-     * This keeps one clear hero title.
+     * Multiple videos are allowed to be featured.
+     *
+     * Do NOT unset featured on any other video.
      */
-    if (data.featured === true) {
-      await prisma.$transaction([
-        prisma.video.updateMany({
-          where: {
-            id: {
-              not: id,
-            },
-            featured: true,
-          },
-          data: {
-            featured: false,
-          },
-        }),
-
-        prisma.video.update({
-          where: { id },
-          data,
-        }),
-      ]);
-    } else {
-      await prisma.video.update({
-        where: { id },
-        data,
-      });
-    }
-
-    const updatedVideo =
-      await prisma.video.findUnique({
-        where: { id },
-      });
+    const updatedVideo = await prisma.video.update({
+      where: { id },
+      data,
+    });
 
     return NextResponse.json(updatedVideo);
   } catch (error) {

@@ -315,23 +315,73 @@ useEffect(() => {
    * Fallback:
    * Most recently added title
    */
-  const featuredVideo = useMemo(() => {
-    const selectedFeatured =
-      readyVideos.find(
-        (video) =>
-          video.featured === true
-      );
+ /*
+ * Featured videos.
+ *
+ * Multiple videos can be selected by admin.
+ * Only READY + PUBLISHED videos with a playable
+ * stream are included.
+ */
+const featuredVideos = useMemo(() => {
+  const selectedFeatured = readyVideos.filter(
+    (video) => video.featured === true
+  );
 
-    return (
-      selectedFeatured ??
-      recentVideos[0] ??
-      null
+  /*
+   * If admin has not selected any featured videos,
+   * fall back to the newest video.
+   */
+  return selectedFeatured.length > 0
+    ? selectedFeatured
+    : recentVideos.slice(0, 1);
+}, [readyVideos, recentVideos]);
+
+/*
+ * Current featured slide.
+ */
+const [featuredIndex, setFeaturedIndex] =
+  useState(0);
+
+/*
+ * Keep the index valid whenever the featured
+ * list changes.
+ */
+useEffect(() => {
+  setFeaturedIndex((current) => {
+    if (featuredVideos.length === 0) {
+      return 0;
+    }
+
+    return current >= featuredVideos.length
+      ? 0
+      : current;
+  });
+}, [featuredVideos.length]);
+
+/*
+ * Automatically rotate featured titles.
+ */
+useEffect(() => {
+  if (featuredVideos.length <= 1) {
+    return;
+  }
+
+  const interval = window.setInterval(() => {
+    setFeaturedIndex((current) =>
+      (current + 1) % featuredVideos.length
     );
-  }, [
-    readyVideos,
-    recentVideos,
-  ]);
+  }, 7000);
 
+  return () => {
+    window.clearInterval(interval);
+  };
+}, [featuredVideos.length]);
+
+/*
+ * Keep the existing hero code compatible.
+ */
+const featuredVideo =
+  featuredVideos[featuredIndex] ?? null;
   /*
    * Trending.
    */
@@ -981,10 +1031,11 @@ useEffect(() => {
               <div className="absolute inset-0 bg-black">
                 {featuredVideo.thumbnailPath ? (
                   <img
-                    src={featuredVideo.thumbnailPath}
-                    alt=""
-                    className="h-full w-full object-cover object-center opacity-95 motion-safe:transition-transform motion-safe:duration-1000"
-                  />
+  key={featuredVideo.id}
+  src={featuredVideo.thumbnailPath}
+  alt=""
+  className="h-full w-full object-cover object-center opacity-95 transition-opacity duration-700"
+/>
                 ) : (
                   <div className="h-full w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black" />
                 )}
@@ -1040,7 +1091,23 @@ useEffect(() => {
                     {featuredVideo.description ||
                       "Watch this title in adaptive high-quality streaming with automatic quality selection."}
                   </p>
-
+                        {featuredVideos.length > 1 && (
+  <div className="mt-8 flex items-center gap-2">
+    {featuredVideos.map((video, index) => (
+      <button
+        key={video.id}
+        type="button"
+        aria-label={`Show featured title ${index + 1}`}
+        onClick={() => setFeaturedIndex(index)}
+        className={`h-1.5 rounded-full transition-all duration-300 ${
+          index === featuredIndex
+            ? "w-8 bg-white"
+            : "w-2 bg-white/35 hover:bg-white/60"
+        }`}
+      />
+    ))}
+  </div>
+)}
                   {/* Primary actions */}
                   <div className="mt-7 flex flex-wrap items-center gap-3">
                     <Link
