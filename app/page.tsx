@@ -1008,10 +1008,9 @@ useEffect(() => {
                     <span className="h-px w-10 bg-white/35" />
                   </div>
 
-                  {/* Title */}
-                  <h1 className="max-w-3xl text-4xl font-black leading-[0.98] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-7xl">
-                    {featuredVideo.title}
-                  </h1>
+                  <h1 className="max-w-3xl text-2xl font-black leading-[0.98] tracking-tight text-white sm:text-3xl md:text-4xl lg:text-5xl">
+  {featuredVideo.title}
+</h1>
 
                   {/* Metadata */}
                   <div className="mt-5 flex flex-wrap items-center gap-2.5 text-sm font-medium text-white/85">
